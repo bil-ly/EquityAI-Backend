@@ -1,8 +1,3 @@
-# app/api/analysis.py
-"""
-AI analysis endpoints using Claude API with real market data
-"""
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional, Dict
