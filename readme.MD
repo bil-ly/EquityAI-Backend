@@ -1,6 +1,6 @@
 EquityAI - AI Investment Assistant
 Vision Statement
-Personal AI-powered investment assistant that connects to EasyEquities and uses Claude API to analyze dividend stocks, providing intelligent buy/sell recommendations to optimize portfolio performance.
+Personal AI-powered investment assistant that connects to EasyEquities and usesAPI to analyze dividend stocks, providing intelligent buy/sell recommendations to optimize portfolio performance.
 Core Concept
 Problem: Making smart dividend investment decisions requires analyzing complex financial data and market trends
 Solution: AI assistant that does the heavy lifting - analyzes your actual portfolio and provides personalized recommendations
@@ -52,7 +52,7 @@ Future Enhancements
  Performance benchmarking
  Tax optimization suggestions
 
-Claude Analysis Capabilities
+AI Analysis Capabilities
 
 Dividend Sustainability: Analyze payout ratios, cash flow, debt levels
 Investment Timing: Market conditions, valuation metrics, technical analysis
