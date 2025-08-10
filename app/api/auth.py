@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Pydantic models
+# TODO: I Will move them to schmas later Pydantic models
 class LoginRequest(BaseModel):
     username: str
     password: str
@@ -51,7 +51,7 @@ async def login_easyequities(credentials: dict = Depends(get_ee_credentials)):
         
         accounts = client.accounts.list()
         
-        logger.info(f"✅ EasyEquities login successful for user: {credentials['username']}")
+        logger.info(f"EasyEquities login successful for user: {credentials['username']}")
         
         return LoginResponse(
             status="success",
@@ -60,7 +60,7 @@ async def login_easyequities(credentials: dict = Depends(get_ee_credentials)):
         )
         
     except Exception as e:
-        logger.error(f"❌ EasyEquities login failed: {e}")
+        logger.error(f"EasyEquities login failed: {e}")
         raise HTTPException(status_code=401, detail=f"Login failed: {str(e)}")
 
 @router.post("/login-custom")
@@ -76,7 +76,7 @@ async def login_with_custom_credentials(login_request: LoginRequest):
         
         accounts = client.accounts.list()
         
-        logger.info(f"✅ Custom login successful for user: {login_request.username}")
+        logger.info(f"Custom login successful for user: {login_request.username}")
         
         return {
             "status": "success",
@@ -86,7 +86,7 @@ async def login_with_custom_credentials(login_request: LoginRequest):
         }
         
     except Exception as e:
-        logger.error(f"❌ Custom login failed: {e}")
+        logger.error(f"Custom login failed: {e}")
         raise HTTPException(status_code=401, detail=f"Login failed: {str(e)}")
 
 @router.get("/accounts")
@@ -117,7 +117,7 @@ async def get_accounts(credentials: dict = Depends(get_ee_credentials)):
                 type=account_type
             ))
         
-        logger.info(f"✅ Retrieved {len(formatted_accounts)} accounts")
+        logger.info(f"Retrieved {len(formatted_accounts)} accounts")
         
         return {
             "accounts": formatted_accounts,
@@ -125,7 +125,7 @@ async def get_accounts(credentials: dict = Depends(get_ee_credentials)):
         }
         
     except Exception as e:
-        logger.error(f"❌ Failed to get accounts: {e}")
+        logger.error(f"Failed to get accounts: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get accounts: {str(e)}")
 
 @router.get("/validate")
@@ -148,7 +148,7 @@ async def validate_session(credentials: dict = Depends(get_ee_credentials)):
         }
         
     except Exception as e:
-        logger.error(f"❌ Session validation failed: {e}")
+        logger.error(f"Session validation failed: {e}")
         return {
             "valid": False,
             "message": f"Session invalid: {str(e)}"
