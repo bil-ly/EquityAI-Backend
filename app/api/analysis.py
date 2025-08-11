@@ -6,6 +6,7 @@ import httpx
 import logging
 import yfinance as yf
 from datetime import datetime
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,631 @@ class AnalysisResponse(BaseModel):
 class MarketScanRequest(BaseModel):
     focus: str = "dividend_growth"  # dividend_growth, value, growth, momentum
     max_results: int = 10
+
+class BeginnerInvestmentRequest(BaseModel):
+    deposit_amount: float
+    risk_tolerance: str = "moderate"  # conservative, moderate, aggressive
+    investment_goal: str = "growth"   # growth, income, balanced
+    time_horizon: str = "long_term"   # short_term (1-2y), medium_term (3-5y), long_term (5y+)
+    user_context: Optional[str] = None
+
+class StockRecommendation(BaseModel):
+    symbol: str
+    company_name: str
+    allocation_percentage: float
+    rand_amount: float
+    shares_to_buy: int
+    current_price: float
+    rationale: str
+    risk_level: str
+    expected_dividend_yield: Optional[float] = None
+    sector: Optional[str] = None
+
+class BeginnerPortfolioResponse(BaseModel):
+    total_investment: float
+    cash_reserve: float
+    total_allocated: float
+    recommendations: List[StockRecommendation]
+    portfolio_strategy: str
+    risk_assessment: str
+    key_principles: List[str]
+    next_steps: List[str]
+    estimated_annual_yield: Optional[float] = None
+    diversification_score: str
+
+class DynamicStockScreener:
+    """Dynamically screen JSE stocks based on real market data"""
+    
+    def __init__(self):
+        # Common JSE symbols to screen - this is just a starting point for data gathering
+        self.jse_symbols = [
+            # Major banks
+            "SBK", "FSR", "NED", "ABG", "CPI",
+            # Retailers  
+            "SHP", "PIK", "WHL", "TRU", "MRP",
+            # Telecoms
+            "MTN", "VOD", "TEL",
+            # Mining
+            "AGL", "BIL", "AMS", "GFI", "HAR", "IMP",
+            # REITs
+            "GRT", "RDF", "HYP", "ATT", "FFB",
+            # Industrials
+            "NPN", "PRX", "SAP", "APN", "BVT", "RMH",
+            # Insurance
+            "SLM", "OML", "MMI", "DSY",
+            # Consumer
+            "ABI", "CFR", "RFG", "TBS", "AVI",
+            # Healthcare
+            "NTC", "ADH", "LHC",
+            # Technology
+            "EOH", "ALT", "OCE"
+        ]
+    
+    async def screen_stocks_for_beginners(self, risk_tolerance: str, investment_goal: str, max_stocks: int = 15) -> List[Dict]:
+        """Screen stocks dynamically based on real market data"""
+        
+        logger.info(f"Screening {len(self.jse_symbols)} JSE stocks for beginner portfolio...")
+        
+        # Get real-time data for all stocks
+        stock_data_tasks = []
+        for symbol in self.jse_symbols:
+            stock_data_tasks.append(analyzer.get_jse_stock_data(symbol))
+        
+        # Execute all API calls concurrently for speed
+        stock_data_results = await asyncio.gather(*stock_data_tasks, return_exceptions=True)
+        
+        valid_stocks = []
+        for i, result in enumerate(stock_data_results):
+            if isinstance(result, dict) and not result.get("error"):
+                symbol = self.jse_symbols[i]
+                data = result
+                
+                # Basic quality filters
+                if (data.get("current_price", 0) > 0 and 
+                    data.get("market_cap", 0) > 1_000_000_000 and  # R1B+ market cap
+                    data.get("volume", 0) > 10000):  # Reasonable liquidity
+                    
+                    # Calculate quality score
+                    quality_score = self.calculate_quality_score(data, risk_tolerance, investment_goal)
+                    data["quality_score"] = quality_score
+                    data["symbol"] = symbol
+                    valid_stocks.append(data)
+        
+        # Sort by quality score and return top stocks
+        valid_stocks.sort(key=lambda x: x["quality_score"], reverse=True)
+        
+        logger.info(f"Found {len(valid_stocks)} suitable stocks after screening")
+        return valid_stocks[:max_stocks]
+    
+    def calculate_quality_score(self, stock_data: Dict, risk_tolerance: str, investment_goal: str) -> float:
+        """Calculate a quality score for the stock based on multiple factors"""
+        
+        score = 0.0
+        
+        # Dividend yield scoring (0-25 points)
+        div_yield = stock_data.get("dividend_yield", 0)
+        if div_yield > 8:
+            score += 25
+        elif div_yield > 5:
+            score += 20
+        elif div_yield > 3:
+            score += 15
+        elif div_yield > 1:
+            score += 10
+        
+        # P/E ratio scoring (0-20 points) - prefer reasonable valuations
+        pe_ratio = stock_data.get("pe_ratio", 0)
+        if 8 <= pe_ratio <= 18:
+            score += 20
+        elif 5 <= pe_ratio <= 25:
+            score += 15
+        elif pe_ratio > 0:
+            score += 5
+        
+        # ROE scoring (0-20 points)
+        roe = stock_data.get("roe", 0)
+        if roe > 20:
+            score += 20
+        elif roe > 15:
+            score += 15
+        elif roe > 10:
+            score += 10
+        elif roe > 5:
+            score += 5
+        
+        # Debt/Equity scoring (0-15 points) - prefer lower debt
+        debt_equity = stock_data.get("debt_to_equity", 0)
+        if debt_equity < 30:
+            score += 15
+        elif debt_equity < 50:
+            score += 10
+        elif debt_equity < 100:
+            score += 5
+        
+        # Market cap scoring (0-10 points) - prefer larger, stable companies for beginners
+        market_cap = stock_data.get("market_cap", 0)
+        if market_cap > 50_000_000_000:  # R50B+
+            score += 10
+        elif market_cap > 10_000_000_000:  # R10B+
+            score += 8
+        elif market_cap > 5_000_000_000:   # R5B+
+            score += 6
+        
+        # Adjust for risk tolerance
+        if risk_tolerance == "conservative":
+            # Bonus for stable sectors and lower volatility
+            if stock_data.get("beta", 1.0) < 0.8:
+                score += 10
+            if stock_data.get("sector") in ["Utilities", "Consumer Staples", "Healthcare"]:
+                score += 5
+        elif risk_tolerance == "aggressive":
+            # Bonus for growth metrics
+            revenue_growth = stock_data.get("revenue_growth", 0)
+            if revenue_growth > 15:
+                score += 10
+            elif revenue_growth > 5:
+                score += 5
+        
+        # Adjust for investment goal
+        if investment_goal == "income":
+            # Extra weight on dividend yield
+            score += min(div_yield * 2, 15)
+        elif investment_goal == "growth":
+            # Extra weight on revenue growth
+            revenue_growth = stock_data.get("revenue_growth", 0)
+            score += min(revenue_growth, 15)
+        
+        return score
+
+screener = DynamicStockScreener()
+
+@router.post("/beginner-portfolio", response_model=BeginnerPortfolioResponse)
+async def create_beginner_portfolio(request: BeginnerInvestmentRequest):
+    """
+    Create a beginner-friendly portfolio recommendation based on deposit amount and real market data
+    """
+    try:
+        # Validate minimum investment
+        if request.deposit_amount < 100:
+            raise HTTPException(
+                status_code=400, 
+                detail="Minimum investment amount is R100"
+            )
+        
+        # Reserve cash for brokerage fees (EasyEquities charges ~R7-20 per transaction)
+        # Reserve 3-5% for fees, minimum R50, maximum R200
+        brokerage_reserve = max(50, min(request.deposit_amount * 0.04, 200))
+        investable_amount = request.deposit_amount - brokerage_reserve
+        
+        logger.info(f"Creating beginner portfolio for R{request.deposit_amount} (R{investable_amount} investable)")
+        
+        # Screen stocks dynamically
+        suitable_stocks = await screener.screen_stocks_for_beginners(
+            request.risk_tolerance,
+            request.investment_goal,
+            max_stocks=12
+        )
+        
+        if not suitable_stocks:
+            raise HTTPException(
+                status_code=500,
+                detail="Could not find suitable stocks in current market conditions"
+            )
+        
+        # Create AI prompt for intelligent portfolio allocation
+        stocks_summary = "\n".join([
+            f"- {stock['symbol']} ({stock.get('company_name', 'Unknown')}): "
+            f"Price R{stock.get('current_price', 0):.2f}, "
+            f"Div Yield {stock.get('dividend_yield', 0):.1f}%, "
+            f"P/E {stock.get('pe_ratio', 0):.1f}, "
+            f"ROE {stock.get('roe', 0):.1f}%, "
+            f"Sector: {stock.get('sector', 'Unknown')}, "
+            f"Quality Score: {stock.get('quality_score', 0):.1f}/100"
+            for stock in suitable_stocks[:8]
+        ])
+        
+        allocation_prompt = f"""
+        You are an expert investment advisor creating a beginner portfolio for a South African investor.
+
+        INVESTOR PROFILE:
+        - Total Deposit: R{request.deposit_amount:.2f}
+        - Available for Investment: R{investable_amount:.2f} (after R{brokerage_reserve:.2f} for fees)
+        - Risk Tolerance: {request.risk_tolerance}
+        - Investment Goal: {request.investment_goal}
+        - Time Horizon: {request.time_horizon}
+        - Experience Level: Complete beginner
+
+        TOP QUALITY JSE STOCKS (Real Market Data):
+        {stocks_summary}
+
+        PORTFOLIO REQUIREMENTS:
+        1. Select 3-5 stocks maximum for simplicity and diversification
+        2. No single stock should exceed 35% of portfolio (concentration risk)
+        3. Minimum position size should be at least R100 (meaningful allocation)
+        4. Must be able to buy whole shares only
+        5. Prioritize different sectors for diversification
+        6. Consider dividend income potential for {request.investment_goal} goal
+
+        For EACH recommended stock, provide:
+        - Symbol and company name
+        - Exact percentage allocation (total must be 95-100%)
+        - Specific Rand amount to invest
+        - Number of whole shares to purchase
+        - Investment rationale (2-3 sentences)
+        - Risk level (Low/Moderate/High)
+
+        Also provide:
+        - Overall portfolio strategy (3-4 sentences)
+        - 5 key investment principles for beginners
+        - 5 practical next steps after investing
+
+        Format your response clearly with sections for each stock recommendation.
+        Be specific with numbers - this person will use your exact recommendations to invest.
+        """
+        
+        # Get AI allocation recommendation
+        allocation_analysis = await call_claude_api(allocation_prompt, max_tokens=2500)
+        
+        # Parse the AI response to extract structured recommendations
+        recommendations = parse_ai_allocation_response(
+            allocation_analysis,
+            suitable_stocks,
+            investable_amount
+        )
+        
+        # If parsing failed, create a fallback allocation
+        if not recommendations:
+            recommendations = create_intelligent_fallback_allocation(
+                suitable_stocks,
+                investable_amount,
+                request.risk_tolerance,
+                request.investment_goal
+            )
+        
+        # Calculate portfolio metrics
+        total_allocated = sum(rec.rand_amount for rec in recommendations)
+        cash_remaining = investable_amount - total_allocated
+        
+        # Calculate estimated annual dividend yield
+        estimated_yield = 0
+        if total_allocated > 0:
+            weighted_yield = sum(
+                rec.rand_amount * (rec.expected_dividend_yield or 0) / 100
+                for rec in recommendations
+            )
+            estimated_yield = (weighted_yield / total_allocated) * 100
+        
+        # Calculate diversification score
+        sectors = set(rec.sector for rec in recommendations if rec.sector)
+        diversification_score = f"Good ({len(sectors)} sectors)" if len(sectors) >= 3 else f"Moderate ({len(sectors)} sectors)"
+        
+        # Extract guidance from AI response
+        strategy, principles, next_steps = extract_guidance_from_ai_response(allocation_analysis)
+        
+        logger.info(f"✅ Created beginner portfolio: {len(recommendations)} stocks, R{total_allocated:.2f} allocated")
+        
+        return BeginnerPortfolioResponse(
+            total_investment=request.deposit_amount,
+            cash_reserve=brokerage_reserve + cash_remaining,
+            total_allocated=total_allocated,
+            recommendations=recommendations,
+            portfolio_strategy=strategy,
+            risk_assessment=f"{request.risk_tolerance.title()} risk portfolio optimized for {request.investment_goal}",
+            key_principles=principles,
+            next_steps=next_steps,
+            estimated_annual_yield=estimated_yield if estimated_yield > 0 else None,
+            diversification_score=diversification_score
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Beginner portfolio creation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Portfolio creation failed: {str(e)}")
+
+def parse_ai_allocation_response(ai_response: str, stock_data_list: List[Dict], investable_amount: float) -> List[StockRecommendation]:
+    """Parse AI response to extract specific stock recommendations"""
+    
+    recommendations = []
+    stock_data_map = {stock['symbol']: stock for stock in stock_data_list}
+    
+    lines = ai_response.split('\n')
+    
+    for line in lines:
+        line = line.strip()
+        
+        # Look for lines containing stock symbols and allocation info
+        for symbol in stock_data_map.keys():
+            if symbol in line and any(char in line for char in ['R', '%', 'rand', 'Rand']):
+                try:
+                    import re
+                    
+                    # Extract percentage
+                    percentage_match = re.search(r'(\d+(?:\.\d+)?)%', line)
+                    percentage = float(percentage_match.group(1)) if percentage_match else 0
+                    
+                    # Extract Rand amount - handle various formats
+                    amount_patterns = [
+                        r'R\s*(\d+(?:[,\s]\d+)*(?:\.\d+)?)',
+                        r'(\d+(?:[,\s]\d+)*(?:\.\d+)?)\s*rand',
+                        r'invest\s+R?(\d+(?:[,\s]\d+)*(?:\.\d+)?)'
+                    ]
+                    
+                    rand_amount = 0
+                    for pattern in amount_patterns:
+                        amount_match = re.search(pattern, line, re.IGNORECASE)
+                        if amount_match:
+                            amount_str = amount_match.group(1).replace(',', '').replace(' ', '')
+                            rand_amount = float(amount_str)
+                            break
+                    
+                    # If no amount found but percentage exists, calculate from percentage
+                    if rand_amount == 0 and percentage > 0:
+                        rand_amount = (percentage / 100) * investable_amount
+                    
+                    stock_data = stock_data_map[symbol]
+                    current_price = stock_data.get('current_price', 0)
+                    
+                    if current_price > 0 and rand_amount >= 50:  # Minimum R50 position
+                        shares_to_buy = int(rand_amount / current_price)
+                        if shares_to_buy > 0:
+                            actual_amount = shares_to_buy * current_price
+                            actual_percentage = (actual_amount / investable_amount) * 100
+                            
+                            # Extract rationale from nearby lines
+                            rationale = extract_rationale_for_stock(ai_response, symbol)
+                            
+                            # Determine risk level based on stock characteristics
+                            risk_level = determine_risk_level(stock_data)
+                            
+                            recommendations.append(StockRecommendation(
+                                symbol=symbol,
+                                company_name=stock_data.get('company_name', f"{symbol} Ltd"),
+                                allocation_percentage=actual_percentage,
+                                rand_amount=actual_amount,
+                                shares_to_buy=shares_to_buy,
+                                current_price=current_price,
+                                rationale=rationale,
+                                risk_level=risk_level,
+                                expected_dividend_yield=stock_data.get('dividend_yield', 0),
+                                sector=stock_data.get('sector', 'Unknown')
+                            ))
+                            break
+                            
+                except Exception as e:
+                    logger.warning(f"Could not parse recommendation for {symbol}: {e}")
+                    continue
+    
+    # Remove duplicates and sort by allocation
+    seen_symbols = set()
+    unique_recommendations = []
+    for rec in recommendations:
+        if rec.symbol not in seen_symbols:
+            unique_recommendations.append(rec)
+            seen_symbols.add(rec.symbol)
+    
+    return sorted(unique_recommendations, key=lambda x: x.allocation_percentage, reverse=True)[:5]
+
+def create_intelligent_fallback_allocation(stock_data_list: List[Dict], investable_amount: float, 
+                                         risk_tolerance: str, investment_goal: str) -> List[StockRecommendation]:
+    """Create intelligent fallback allocation if AI parsing fails"""
+    
+    logger.info("Creating fallback allocation using rule-based approach")
+    
+    # Sort stocks by quality score
+    sorted_stocks = sorted(stock_data_list, key=lambda x: x.get('quality_score', 0), reverse=True)
+    
+    recommendations = []
+    sectors_used = set()
+    remaining_amount = investable_amount
+    
+    # Target 3-4 stocks for simplicity
+    target_stocks = 4 if investable_amount > 2000 else 3
+    
+    for i, stock_data in enumerate(sorted_stocks):
+        if len(recommendations) >= target_stocks or remaining_amount < 100:
+            break
+        
+        sector = stock_data.get('sector', 'Unknown')
+        current_price = stock_data.get('current_price', 0)
+        
+        # Skip if same sector already represented (unless it's a much better stock)
+        if sector in sectors_used and i > 0:
+            continue
+        
+        if current_price > 0 and current_price <= remaining_amount:
+            # Calculate allocation based on position in ranking and remaining amount
+            if i == 0:  # Top stock gets larger allocation
+                allocation_percent = 40 if risk_tolerance == "conservative" else 35
+            else:
+                allocation_percent = 25
+            
+            target_amount = min(
+                (allocation_percent / 100) * investable_amount,
+                remaining_amount * 0.6  # Don't use more than 60% of remaining on one stock
+            )
+            
+            shares_to_buy = int(target_amount / current_price)
+            if shares_to_buy > 0:
+                actual_amount = shares_to_buy * current_price
+                actual_percentage = (actual_amount / investable_amount) * 100
+                
+                recommendations.append(StockRecommendation(
+                    symbol=stock_data['symbol'],
+                    company_name=stock_data.get('company_name', f"{stock_data['symbol']} Ltd"),
+                    allocation_percentage=actual_percentage,
+                    rand_amount=actual_amount,
+                    shares_to_buy=shares_to_buy,
+                    current_price=current_price,
+                    rationale=f"High-quality {sector} stock with {stock_data.get('dividend_yield', 0):.1f}% dividend yield",
+                    risk_level=determine_risk_level(stock_data),
+                    expected_dividend_yield=stock_data.get('dividend_yield', 0),
+                    sector=sector
+                ))
+                
+                sectors_used.add(sector)
+                remaining_amount -= actual_amount
+    
+    return recommendations
+
+def extract_rationale_for_stock(ai_response: str, symbol: str) -> str:
+    """Extract investment rationale for a specific stock from AI response"""
+    
+    lines = ai_response.split('\n')
+    rationale_lines = []
+    
+    # Look for lines near the symbol mention
+    for i, line in enumerate(lines):
+        if symbol in line:
+            # Check surrounding lines for rationale
+            for j in range(max(0, i-2), min(len(lines), i+4)):
+                check_line = lines[j].strip()
+                if (len(check_line) > 20 and 
+                    any(word in check_line.lower() for word in ['because', 'due to', 'offers', 'strong', 'stable', 'growth', 'dividend'])):
+                    rationale_lines.append(check_line)
+    
+    if rationale_lines:
+        return '. '.join(rationale_lines[:2])  # Max 2 sentences
+    else:
+        return f"Selected for portfolio diversification and dividend income potential"
+
+def determine_risk_level(stock_data: Dict) -> str:
+    """Determine risk level based on stock characteristics"""
+    
+    beta = stock_data.get('beta', 1.0)
+    debt_equity = stock_data.get('debt_to_equity', 0)
+    sector = stock_data.get('sector', '').lower()
+    
+    risk_score = 0
+    
+    # Beta scoring
+    if beta > 1.3:
+        risk_score += 2
+    elif beta > 1.1:
+        risk_score += 1
+    
+    # Debt scoring
+    if debt_equity > 100:
+        risk_score += 2
+    elif debt_equity > 50:
+        risk_score += 1
+    
+    # Sector scoring
+    if any(sector_name in sector for sector_name in ['mining', 'technology', 'biotech']):
+        risk_score += 2
+    elif any(sector_name in sector for sector_name in ['banking', 'retail', 'industrial']):
+        risk_score += 1
+    
+    if risk_score >= 4:
+        return "High"
+    elif risk_score >= 2:
+        return "Moderate"
+    else:
+        return "Low"
+
+def extract_guidance_from_ai_response(ai_response: str) -> tuple:
+    """Extract strategy, principles and next steps from AI response"""
+    
+    # Default fallbacks
+    strategy = "Diversified beginner portfolio focusing on quality JSE companies with sustainable dividends and growth potential."
+    
+    principles = [
+        "Invest only in companies you understand",
+        "Diversify across different sectors",
+        "Focus on dividend-paying stocks for passive income",
+        "Reinvest dividends for compound growth",
+        "Review portfolio quarterly, not daily"
+    ]
+    
+    next_steps = [
+        "Set up automatic dividend reinvestment",
+        "Learn about each company you own",
+        "Add R200-500 monthly if possible",
+        "Monitor quarterly results, not daily prices",
+        "Consider tax-free savings account for future investments"
+    ]
+    
+    # Try to extract better content from AI response
+    lines = ai_response.split('\n')
+    current_section = None
+    extracted_principles = []
+    extracted_steps = []
+    
+    for line in lines:
+        line_clean = line.strip()
+        line_lower = line_clean.lower()
+        
+        # Identify sections
+        if 'strategy' in line_lower and len(line_clean) > 30:
+            strategy = line_clean
+        elif any(word in line_lower for word in ['principle', 'key point', 'important']):
+            current_section = 'principles'
+        elif any(word in line_lower for word in ['next step', 'action', 'should']):
+            current_section = 'next_steps'
+        elif line_clean.startswith(('-', '•', '*', '1.', '2.', '3.', '4.', '5.')):
+            content = line_clean.lstrip('-•*1234567890. ')
+            if current_section == 'principles' and len(content) > 10:
+                extracted_principles.append(content)
+            elif current_section == 'next_steps' and len(content) > 10:
+                extracted_steps.append(content)
+    
+    # Use extracted content if found
+    if extracted_principles:
+        principles = extracted_principles[:5]
+    if extracted_steps:
+        next_steps = extracted_steps[:5]
+    
+    return strategy, principles, next_steps
+
+@router.get("/market-overview")
+async def get_market_overview_for_beginners():
+    """Get current market overview suitable for beginner investors"""
+    
+    try:
+        # Screen a subset of stocks to get market overview
+        market_stocks = await screener.screen_stocks_for_beginners("moderate", "balanced", max_stocks=20)
+        
+        if not market_stocks:
+            return {"message": "Unable to retrieve market data at this time"}
+        
+        # Calculate market metrics
+        avg_dividend_yield = sum(stock.get('dividend_yield', 0) for stock in market_stocks) / len(market_stocks)
+        avg_pe_ratio = sum(stock.get('pe_ratio', 0) for stock in market_stocks if stock.get('pe_ratio', 0) > 0) / max(1, len([s for s in market_stocks if s.get('pe_ratio', 0) > 0]))
+        
+        # Categorize by sectors
+        sector_counts = {}
+        for stock in market_stocks:
+            sector = stock.get('sector', 'Unknown')
+            sector_counts[sector] = sector_counts.get(sector, 0) + 1
+        
+        top_opportunities = market_stocks[:5]
+        
+        return {
+            "market_summary": {
+                "total_stocks_analyzed": len(market_stocks),
+                "average_dividend_yield": round(avg_dividend_yield, 2),
+                "average_pe_ratio": round(avg_pe_ratio, 1),
+                "sectors_available": len(sector_counts),
+                "sector_distribution": sector_counts
+            },
+            "top_beginner_opportunities": [
+                {
+                    "symbol": stock['symbol'],
+                    "name": stock.get('company_name', 'Unknown'),
+                    "price": stock.get('current_price', 0),
+                    "dividend_yield": stock.get('dividend_yield', 0),
+                    "sector": stock.get('sector', 'Unknown'),
+                    "quality_score": round(stock.get('quality_score', 0), 1)
+                }
+                for stock in top_opportunities
+            ],
+            "market_note": "Data refreshed in real-time from JSE. Suitable for beginner investors.",
+            "timestamp": "2024-08-07T10:00:00Z"
+        }
+        
+    except Exception as e:
+        logger.error(f"Market overview failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Market overview failed: {str(e)}")
 
 # Claude API configuration
 CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
