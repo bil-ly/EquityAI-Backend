@@ -1100,6 +1100,8 @@ screener = DynamicStockScreener()
 
 # Complete fixed beginner portfolio endpoint and supporting functions
 
+# Complete budget-aware beginner portfolio code
+
 @router.post("/beginner-portfolio", response_model=BeginnerPortfolioResponse)
 async def create_beginner_portfolio(request: BeginnerInvestmentRequest):
     """
@@ -1123,7 +1125,7 @@ async def create_beginner_portfolio(request: BeginnerInvestmentRequest):
         raw_stocks = await screener.screen_stocks_for_beginners(
             request.risk_tolerance,
             request.investment_goal,
-            max_stocks=20  # Increased from 12 to get more options
+            max_stocks=20  # Increased to get more options
         )
         
         if not raw_stocks:
@@ -1153,6 +1155,10 @@ async def create_beginner_portfolio(request: BeginnerInvestmentRequest):
             for stock in suitable_stocks[:10]  # Show top 10 options
         ])
         
+        # Adjust requirements based on budget
+        max_stocks = 2 if investable_amount < 1000 else 3
+        target_allocation = "80-90%" if investable_amount < 1000 else "85-95%"
+        
         allocation_prompt = f"""
         You are an expert investment advisor creating a beginner portfolio for a South African investor.
 
@@ -1163,21 +1169,23 @@ async def create_beginner_portfolio(request: BeginnerInvestmentRequest):
         - Investment Goal: {request.investment_goal}
         - Time Horizon: {request.time_horizon}
         - Experience Level: Complete beginner
+        - Budget Category: {"Small budget" if investable_amount < 1000 else "Medium budget"}
 
         TOP QUALITY JSE STOCKS (VALIDATED Real Market Data):
         {stocks_summary}
 
         PORTFOLIO REQUIREMENTS:
-        1. Select 2-4 stocks for proper diversification
-        2. No single stock should exceed 40% of portfolio (concentration risk)
+        1. Select {max_stocks} stocks maximum (budget-appropriate diversification)
+        2. No single stock should exceed 50% of portfolio for small budgets
         3. Minimum position size should be at least R80 (meaningful allocation)
         4. Must be able to buy whole shares only
         5. Prioritize different sectors for diversification
-        6. Use 85-95% of available investment amount
+        6. Use {target_allocation} of available investment amount
+        7. For small budgets, focus on affordable stocks under R150 per share
 
         For EACH recommended stock, provide:
         - Symbol and company name
-        - Exact percentage allocation (total must be 85-95%)
+        - Exact percentage allocation (total must be {target_allocation})
         - Specific Rand amount to invest
         - Number of whole shares to purchase
         - Investment rationale focusing on fundamentals
@@ -1185,7 +1193,7 @@ async def create_beginner_portfolio(request: BeginnerInvestmentRequest):
 
         IMPORTANT: 
         - Only use the dividend yields provided above - they have been validated as realistic
-        - Prioritize sector diversification over individual stock preferences
+        - For small budgets, prioritize affordability and diversification over individual stock preferences
         - Ensure you allocate most of the available investment amount
         
         Format your response clearly with sections for each stock recommendation.
@@ -1204,7 +1212,7 @@ async def create_beginner_portfolio(request: BeginnerInvestmentRequest):
         
         # If parsing failed, create a fallback allocation
         if not recommendations:
-            recommendations = create_validated_fallback_allocation(
+            recommendations = create_budget_aware_fallback_allocation(
                 suitable_stocks,
                 investable_amount,
                 request.risk_tolerance,
@@ -1229,12 +1237,17 @@ async def create_beginner_portfolio(request: BeginnerInvestmentRequest):
         
         # Calculate diversification score
         sectors = set(rec.sector for rec in recommendations if rec.sector)
-        diversification_score = f"Excellent ({len(sectors)} sectors)" if len(sectors) >= 3 else f"Good ({len(sectors)} sectors)" if len(sectors) >= 2 else f"Limited ({len(sectors)} sector)"
+        if len(sectors) >= 3:
+            diversification_score = f"Excellent ({len(sectors)} sectors)"
+        elif len(sectors) >= 2:
+            diversification_score = f"Good ({len(sectors)} sectors)"
+        else:
+            diversification_score = f"Limited ({len(sectors)} sector)"
         
         # Extract guidance from AI response
         strategy, principles, next_steps = extract_guidance_from_ai_response(allocation_analysis)
         
-        logger.info(f"✅ Created validated beginner portfolio: {len(recommendations)} stocks, R{total_allocated:.2f} allocated, {len(sectors)} sectors")
+        logger.info(f"✅ Created budget-aware portfolio: {len(recommendations)} stocks, R{total_allocated:.2f} allocated, {len(sectors)} sectors")
         
         return BeginnerPortfolioResponse(
             total_investment=request.deposit_amount,
@@ -1319,29 +1332,65 @@ def validate_and_clean_stock_data(raw_stocks: List[Dict]) -> List[Dict]:
     logger.info(f"✅ Cleaned stock data: {len(raw_stocks)} → {len(cleaned_stocks)} valid stocks")
     return cleaned_stocks
 
-def create_validated_fallback_allocation(stocks: List[Dict], investable_amount: float, 
-                                       risk_tolerance: str, investment_goal: str) -> List[StockRecommendation]:
-    """Create fallback allocation with validated data and better diversification"""
+def create_budget_aware_fallback_allocation(stocks: List[Dict], investable_amount: float, 
+                                          risk_tolerance: str, investment_goal: str) -> List[StockRecommendation]:
+    """Create fallback allocation that's aware of budget constraints"""
     
     if not stocks:
         return []
     
-    # Group stocks by sector for diversification
-    sectors = {}
+    logger.info(f"💰 Creating budget-aware allocation for R{investable_amount}")
+    
+    # Filter stocks by affordability first
+    affordable_stocks = []
+    
     for stock in stocks:
+        current_price = stock.get('current_price', 0)
+        
+        # Budget-based affordability filter
+        if investable_amount < 800:
+            # Small budget: only stocks under R120 (can buy at least 3-4 shares)
+            if current_price <= 120:
+                affordable_stocks.append(stock)
+        elif investable_amount < 1500:
+            # Medium budget: stocks under R200
+            if current_price <= 200:
+                affordable_stocks.append(stock)
+        else:
+            # Large budget: most stocks are affordable
+            if current_price <= 500:
+                affordable_stocks.append(stock)
+    
+    logger.info(f"📊 Affordable stocks: {len(affordable_stocks)} out of {len(stocks)}")
+    
+    if not affordable_stocks:
+        # If no affordable stocks, just use cheapest available
+        affordable_stocks = sorted(stocks, key=lambda x: x.get('current_price', 0))[:5]
+        logger.warning("⚠️ No affordable stocks found, using cheapest available")
+    
+    # Group affordable stocks by sector for diversification
+    sectors = {}
+    for stock in affordable_stocks:
         sector = stock.get('sector', 'Unknown')
         if sector not in sectors:
             sectors[sector] = []
         sectors[sector].append(stock)
     
-    logger.info(f"📊 Available sectors: {list(sectors.keys())}")
+    logger.info(f"📈 Available sectors: {list(sectors.keys())}")
     
     # Sort stocks within each sector by quality
     for sector in sectors:
         def stock_score(stock):
             quality = stock.get('quality_score', 0)
             div_yield = min(stock.get('dividend_yield', 0), 12)  # Cap at 12%
-            return quality + (div_yield * 3)  # Moderate bonus for dividends
+            price = stock.get('current_price', 1)
+            
+            # Bonus for affordability (lower price gets higher score for small budgets)
+            affordability_bonus = 0
+            if investable_amount < 1000:
+                affordability_bonus = max(0, (150 - price) / 10)  # Bonus for stocks under R150
+            
+            return quality + (div_yield * 3) + affordability_bonus
         
         sectors[sector] = sorted(sectors[sector], key=stock_score, reverse=True)
     
@@ -1349,30 +1398,43 @@ def create_validated_fallback_allocation(stocks: List[Dict], investable_amount: 
     remaining_amount = investable_amount
     used_sectors = set()
     
-    # Target 2-3 stocks from different sectors
-    target_stocks = min(3, len(sectors))
-    allocations = [50, 30, 20] if target_stocks >= 3 else [60, 40] if target_stocks >= 2 else [100]
+    # Budget-aware target stocks and allocations
+    if investable_amount < 600:
+        target_stocks = 2
+        allocations = [60,40]
+    elif investable_amount < 1000:
+        target_stocks = 2
+        allocations = [65, 35]
+    elif investable_amount < 2000:
+        target_stocks = 2
+        allocations = [60, 40]
+    else:
+        target_stocks = min(3, len(sectors))
+        allocations = [50, 30, 20] if target_stocks >= 3 else [60, 40]
     
-    # Try to get one stock from each sector
-    sector_priority = ["Banking", "Telecoms", "Retail", "Insurance", "Industrial", "Consumer Goods", "Mining"]
+    logger.info(f"🎯 Target: {target_stocks} stocks with allocations {allocations}")
+    
+    # Sector priority for diversification
+    sector_priority = ["Banking", "Financial Services", "Telecoms", "Consumer Defensive", "Consumer Goods", "Retail", "Insurance", "Industrial", "Basic Materials", "Mining"]
     
     stock_count = 0
     
     # First, try priority sectors
     for priority_sector in sector_priority:
-        if stock_count >= target_stocks or remaining_amount < 80:
+        if stock_count >= target_stocks or remaining_amount < 50:
             break
             
         if priority_sector in sectors and priority_sector not in used_sectors:
             best_stock = sectors[priority_sector][0]  # Best stock in this sector
             current_price = best_stock.get('current_price', 0)
             
-            if current_price > 0 and current_price <= remaining_amount * 0.6:  # Max 60% on one stock
+            # Check if we can afford this stock
+            max_allocation_for_stock = allocations[stock_count] if stock_count < len(allocations) else 20
+            max_amount_for_stock = (max_allocation_for_stock / 100) * investable_amount
+            
+            if current_price > 0 and current_price <= max_amount_for_stock:
                 
-                allocation_percent = allocations[stock_count]
-                target_amount = (allocation_percent / 100) * investable_amount
-                target_amount = min(target_amount, remaining_amount)
-                
+                target_amount = min(max_amount_for_stock, remaining_amount)
                 shares_to_buy = int(target_amount / current_price)
                 
                 if shares_to_buy > 0:
@@ -1387,7 +1449,7 @@ def create_validated_fallback_allocation(stocks: List[Dict], investable_amount: 
                         rand_amount=actual_amount,
                         shares_to_buy=shares_to_buy,
                         current_price=current_price,
-                        rationale=f"Quality {priority_sector} stock with {dividend_yield:.1f}% dividend yield and strong market position",
+                        rationale=f"Quality {priority_sector} stock with {dividend_yield:.1f}% dividend yield and strong fundamentals",
                         risk_level=determine_risk_level_from_data(best_stock),
                         expected_dividend_yield=dividend_yield,
                         sector=priority_sector
@@ -1396,22 +1458,22 @@ def create_validated_fallback_allocation(stocks: List[Dict], investable_amount: 
                     remaining_amount -= actual_amount
                     used_sectors.add(priority_sector)
                     stock_count += 1
-                    logger.info(f"✅ Added {best_stock['symbol']} from {priority_sector}")
+                    logger.info(f"✅ Added {best_stock['symbol']} from {priority_sector}: R{actual_amount:.2f}")
     
-    # If we still need more stocks, add from remaining sectors
+    # If we still need more stocks and have budget, add from remaining sectors
     for sector, sector_stocks in sectors.items():
-        if stock_count >= target_stocks or remaining_amount < 80:
+        if stock_count >= target_stocks or remaining_amount < 50:
             break
             
-        if sector not in used_sectors:
+        if sector not in used_sectors and sector_stocks:
             best_stock = sector_stocks[0]
             current_price = best_stock.get('current_price', 0)
             
             if current_price > 0 and current_price <= remaining_amount:
                 
-                # Use remaining allocation or 20% minimum
-                remaining_allocation = max(20, (remaining_amount / investable_amount) * 100)
-                target_amount = min(remaining_amount * 0.8, (remaining_allocation / 100) * investable_amount)
+                # Use remaining budget or minimum 15% allocation
+                min_allocation = max(15, (remaining_amount / investable_amount) * 100)
+                target_amount = min(remaining_amount * 0.8, (min_allocation / 100) * investable_amount)
                 
                 shares_to_buy = int(target_amount / current_price)
                 
@@ -1436,9 +1498,13 @@ def create_validated_fallback_allocation(stocks: List[Dict], investable_amount: 
                     remaining_amount -= actual_amount
                     used_sectors.add(sector)
                     stock_count += 1
-                    logger.info(f"✅ Added {best_stock['symbol']} from {sector}")
+                    logger.info(f"✅ Added {best_stock['symbol']} from {sector}: R{actual_amount:.2f}")
     
-    logger.info(f"📈 Created fallback allocation: {len(recommendations)} stocks, {len(used_sectors)} sectors")
+    total_allocated = sum(rec.rand_amount for rec in recommendations)
+    allocation_percentage = (total_allocated / investable_amount) * 100
+    
+    logger.info(f"📈 Final allocation: {len(recommendations)} stocks, R{total_allocated:.2f} ({allocation_percentage:.1f}%), {len(used_sectors)} sectors")
+    
     return recommendations
 
 def validate_final_recommendations(recommendations: List[StockRecommendation]) -> List[StockRecommendation]:
@@ -1483,11 +1549,11 @@ def determine_risk_level_from_data(stock: Dict) -> str:
     risk_score = 0
     
     # Sector risk
-    if any(word in sector for word in ['mining', 'resources', 'technology', 'biotech']):
+    if any(word in sector for word in ['mining', 'resources', 'technology', 'biotech', 'basic materials']):
         risk_score += 2
     elif any(word in sector for word in ['retail', 'consumer', 'industrial']):
         risk_score += 1
-    elif any(word in sector for word in ['banking', 'insurance', 'telecoms', 'utilities']):
+    elif any(word in sector for word in ['banking', 'financial', 'insurance', 'telecoms', 'utilities']):
         risk_score += 0
     else:
         risk_score += 1
@@ -1568,7 +1634,6 @@ def extract_guidance_from_ai_response(ai_response: str) -> tuple:
         next_steps = extracted_steps[:5]
     
     return strategy, principles, next_steps
-
 def parse_ai_allocation_response(ai_response: str, stock_data_list: List[Dict], investable_amount: float) -> List[StockRecommendation]:
     """Parse AI response to extract specific stock recommendations"""
     
