@@ -6,7 +6,7 @@ import asyncio
 from functools import lru_cache
 
 # Import your Synatic client
-from app.synatic_client import EasyEquitiesSynaticClient
+from app.utils.synatic_client import EasyEquitiesSynaticClient
 from app.services.stock_sync import StockSyncService
 
 router = APIRouter(tags=["stocks"])
