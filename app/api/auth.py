@@ -260,18 +260,6 @@ async def login_with_custom_credentials(login_request: LoginRequest):
         
         accounts = client.accounts.list()
         
-        # Store the client
-        token_storage["ee_client"] = client
-        
-        # Try to get the Synatic token
-        synatic_token = await get_synatic_token(client)
-        
-        if not synatic_token:
-            synatic_token = "MANUAL_TOKEN_REQUIRED"
-        
-        # Store token
-        token_storage["bearer_token"] = synatic_token
-        token_storage["token_expiry"] = datetime.now() + timedelta(minutes=30)
         
         logger.info(f"Custom login successful for user: {login_request.username}")
         
@@ -280,9 +268,6 @@ async def login_with_custom_credentials(login_request: LoginRequest):
             "message": "Login successful",
             "accounts_count": len(accounts),
             "username": login_request.username,
-            "access_token": synatic_token,
-            "token_type": "Bearer",
-            "expires_in": 1800
         }
         
     except Exception as e:
