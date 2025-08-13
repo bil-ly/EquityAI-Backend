@@ -6,8 +6,8 @@ from beanie import BulkWriter
 import logging
 
 from app.models.database import Stock
-from app.database import connect_to_mongo, close_mongo_connection
-from app.synatic_client import EasyEquitiesSynaticClient
+from app.utils.database import connect_to_mongo, close_mongo_connection
+from app.utils.synatic_client import EasyEquitiesSynaticClient
 
 logger = logging.getLogger(__name__)
 
