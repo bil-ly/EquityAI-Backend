@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api import auth, portfolio, analysis, dividends
+from app.api import auth, portfolio, analysis, dividends, stocks
 
 app = FastAPI(
     title="EquityAI Backend",
@@ -22,6 +22,7 @@ app.include_router(auth.router, prefix="/api/v1/auth", tags=["authentication"])
 app.include_router(portfolio.router, prefix="/api/v1/portfolio", tags=["portfolio"])
 app.include_router(analysis.router, prefix="/api/v1/analysis", tags=["analysis"])
 app.include_router(dividends.router, prefix="/api/v1/dividends", tags=["dividends"])
+app.include_router(stocks.router, prefix="/api/v1/stocks", tags=["stocks"])
 
 @app.get("/")
 async def root():

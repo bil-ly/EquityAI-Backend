@@ -131,3 +131,66 @@ class DividendInsight(BaseModel):
     next_expected_date: Optional[date]
     yield_attractiveness: str
     risk_factors: List[str]
+
+
+
+class Stock(Document):
+    """Stock document model for MongoDB"""
+    symbol: Indexed(str, unique=True)  # Unique index on symbol
+    name: str
+    contract_code: str
+    sector: str
+    market: str
+    currency: str
+    last_price: Optional[float] = None
+    market_cap: Optional[float] = None
+    pe_ratio: Optional[float] = None
+    dividend_yield: Optional[float] = None
+    volume: Optional[int] = None
+    price_change_52w: Optional[float] = None
+    returns_1m: Optional[float] = None
+    returns_3m: Optional[float] = None
+    returns_6m: Optional[float] = None
+    logo_url: Optional[str] = None
+    is_tradeable: bool = True
+    
+    # Additional fields from Synatic
+    industry: Optional[str] = None
+    description: Optional[str] = None
+    eps: Optional[float] = None
+    price_52w_high: Optional[float] = None
+    price_52w_low: Optional[float] = None
+    beta: Optional[float] = None
+    roe: Optional[float] = None
+    roa: Optional[float] = None
+    debt_to_equity: Optional[float] = None
+    gross_margin: Optional[float] = None
+    net_margin: Optional[float] = None
+    
+    # Metadata
+    last_updated: datetime = Field(default_factory=datetime.now)
+    data_source: str = "synatic"  # Track where data came from
+    
+    class Settings:
+        name = "stocks"
+        indexes = [
+            "symbol",
+            "market",
+            "sector",
+            "currency",
+            [("symbol", 1), ("market", 1)]  # Compound index
+        ]
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "symbol": "NPN",
+                "name": "Naspers Ltd",
+                "contract_code": "EQU.ZA.NPN",
+                "sector": "Technology",
+                "market": "JSE",
+                "currency": "ZAR",
+                "last_price": 2850.00,
+                "market_cap": 1200000000000
+            }
+        }
