@@ -129,3 +129,9 @@ Operational: Graceful degradation, error handling
 
 "The best time to plant a tree was 20 years ago. The second best time is now."
 Let's build the tool that helps you invest smarter, starting today.
+
+# Seting up can run the db creating script using     
+~~~bash
+chmod +x fetch_all.sh  -> for giving it execute permission
+./fetch_all.sh <YOUR_TOKEN>
+~~~
