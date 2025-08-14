@@ -1,602 +1,344 @@
-from fastapi import APIRouter, HTTPException, Query, Depends, Header
-from typing import List, Optional, Dict, Any
+from fastapi import APIRouter, HTTPException, Query
+from typing import List, Optional
 from pydantic import BaseModel
+import yfinance as yf
+import pandas as pd
 from datetime import datetime
-import asyncio
-from functools import lru_cache
-
-# Import your Synatic client
-from app.utils.synatic_client import EasyEquitiesSynaticClient
-from app.services.stock_sync import StockSyncService
 
 router = APIRouter(tags=["stocks"])
-
-# Initialize Synatic client globally
-synatic_client = EasyEquitiesSynaticClient()
 
 # Response Models
 class StockInfo(BaseModel):
     symbol: str
     name: str
-    contract_code: str
-    sector: str
-    market: str
-    currency: str
-    last_price: Optional[float] = None
+    sector: Optional[str] = None
+    industry: Optional[str] = None
+    market: Optional[str] = None
+    currency: Optional[str] = None
+    current_price: Optional[float] = None
     market_cap: Optional[float] = None
+    volume: Optional[int] = None
     pe_ratio: Optional[float] = None
     dividend_yield: Optional[float] = None
-    volume: Optional[int] = None
-    price_change_52w: Optional[float] = None
-    returns_1m: Optional[float] = None
-    returns_3m: Optional[float] = None
-    returns_6m: Optional[float] = None
-    logo_url: Optional[str] = None
-    is_tradeable: bool = True
     
-class StockSearchResponse(BaseModel):
+class StockListResponse(BaseModel):
     stocks: List[StockInfo]
     total_count: int
-    page: int
-    per_page: int
-    from_cache: bool = False
-    
-class MarketSummary(BaseModel):
-    market: str
-    total_stocks: int
-    sectors: List[str]
-    
-class StockDetail(BaseModel):
-    symbol: str
-    name: str
-    contract_code: str
-    sector: str
-    industry: str
-    market: str
-    currency: str
-    description: Optional[str] = None
-    last_price: Optional[float] = None
-    previous_close: Optional[float] = None
-    change: Optional[float] = None
-    change_percent: Optional[float] = None
-    volume: Optional[int] = None
-    market_cap: Optional[float] = None
-    pe_ratio: Optional[float] = None
-    eps: Optional[float] = None
-    dividend_yield: Optional[float] = None
-    price_52w_high: Optional[float] = None
-    price_52w_low: Optional[float] = None
-    returns_1m: Optional[float] = None
-    returns_3m: Optional[float] = None
-    returns_6m: Optional[float] = None
-    logo_url: Optional[str] = None
-    company_website: Optional[str] = None
-    is_tradeable: bool = True
-    updated_at: datetime
+    returned_count: int
 
-# Dependency to get bearer token from header
-async def get_bearer_token(authorization: Optional[str] = Header(None)) -> Optional[str]:
-    """Extract bearer token from authorization header"""
-    if authorization and authorization.startswith("Bearer "):
-        return authorization.replace("Bearer ", "")
-    return None
+# JSE stocks (South African)
+JSE_STOCKS = [
+    "NPN.JO",   # Naspers
+    "PRX.JO",   # Prosus  
+    "SHP.JO",   # Shoprite
+    "ABG.JO",   # Absa Group
+    "FSR.JO",   # FirstRand
+    "SOL.JO",   # Sasol
+    "NED.JO",   # Nedbank
+    "AGL.JO",   # Anglo American
+    "BVT.JO",   # Bidvest
+    "MTN.JO",   # MTN Group
+    "VOD.JO",   # Vodacom
+    "TKG.JO",   # Telkom
+    "IMP.JO",   # Impala Platinum
+    "BHP.JO",   # BHP Billiton
+    "APN.JO",   # Aspen Pharmacare
+    "KIO.JO",   # Kumba Iron Ore
+    "MRP.JO",   # Mr Price Group
+    "TBS.JO",   # Tiger Brands
+    "PIK.JO",   # Pick n Pay
+    "WHL.JO"    # Woolworths
+]
 
-# Helper function to transform Synatic data to StockInfo
-def transform_to_stock_info(instrument: Dict[str, Any]) -> StockInfo:
-    """Transform Synatic instrument data to StockInfo model"""
-    general = instrument.get("General", {})
-    fundamental = instrument.get("Fundamental", {})
-    price_data = instrument.get("Price", {})
-    dividends = instrument.get("Dividends", {})
-    returns = instrument.get("returns", {})
-    
-    # Determine market from exchange or flag code
-    exchange = instrument.get("Exchange", "")
-    flag_code = instrument.get("flagCode", "")
-    if flag_code == "ZA" or exchange == "JSE":
-        market = "JSE"
-    elif exchange in ["USA", "NYSE", "NASDAQ"]:
-        market = exchange if exchange != "USA" else "NYSE"
-    else:
-        market = exchange or "Unknown"
-    
-    return StockInfo(
-        symbol=instrument.get("ticker", ""),
-        name=instrument.get("name", ""),
-        contract_code=instrument.get("contractCode", ""),
-        sector=general.get("sector", instrument.get("category", "Unknown")),
-        market=market,
-        currency=general.get("currency", "ZAR" if flag_code == "ZA" else "USD"),
-        last_price=float(instrument.get("lastPrice", 0) or 0) if instrument.get("lastPrice") else None,
-        market_cap=fundamental.get("mktcap"),
-        pe_ratio=fundamental.get("pe"),
-        dividend_yield=dividends.get("yield"),
-        volume=price_data.get("volume"),
-        price_change_52w=price_data.get("pchange_52w"),
-        returns_1m=returns.get("1mo", {}).get("percentage"),
-        returns_3m=returns.get("3mo", {}).get("percentage"),
-        returns_6m=returns.get("6mo", {}).get("percentage"),
-        logo_url=instrument.get("logoUrl"),
-        is_tradeable=True
-    )
-@router.post("/sync-to-mongodb")
-async def sync_stocks_to_mongodb(
-    token: Optional[str] = Depends(get_bearer_token)
-):
-    """Sync all stocks from Synatic to MongoDB"""
-    
-    if not token:
-        raise HTTPException(status_code=401, detail="Authorization token required")
-    
+# US stocks
+US_STOCKS = [
+    "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", 
+    "META", "NVDA", "NFLX", "JPM", "JNJ"
+]
+
+# Combine all stocks
+POPULAR_STOCKS = JSE_STOCKS + US_STOCKS
+
+def get_stock_info(symbol: str) -> Optional[StockInfo]:
+    """Get stock information from yfinance"""
     try:
-        # Initialize sync service
-        sync_service = StockSyncService()
+        ticker = yf.Ticker(symbol)
+        info = ticker.info
         
-        # Sync all stocks
-        stats = await sync_service.sync_all_stocks_from_synatic(token)
+        # Debug: Print some info to see what we're getting
+        print(f"Fetching {symbol}...")
         
-        return {
-            "status": "success",
-            "statistics": stats,
-            "message": f"Synced {stats['total_stocks']} stocks to MongoDB"
-        }
+        # Get current price - try multiple fields
+        current_price = (info.get('currentPrice') or 
+                        info.get('regularMarketPrice') or 
+                        info.get('ask') or 
+                        info.get('bid') or
+                        info.get('previousClose'))
+        
+        # Determine market and currency based on symbol
+        if symbol.endswith(".JO"):
+            market = "JSE"
+            default_currency = "ZAR"
+        elif symbol.endswith(".SW"):
+            market = "SWX"  # Swiss Exchange
+            default_currency = "CHF"
+        elif symbol.endswith(".PA"):
+            market = "EPA"  # Euronext Paris
+            default_currency = "EUR"
+        elif "." not in symbol:
+            market = "NASDAQ"
+            default_currency = "USD"
+        else:
+            market = "Other"
+            default_currency = "USD"
+        
+        # Get currency, fallback to default based on market
+        raw_currency = info.get('currency') or default_currency
+        
+        # Normalize South African currency and convert cents to rands
+        if raw_currency == "ZAc":  # South African cents
+            currency = "ZAR"   # Convert to ZAR for consistency
+            # Convert price from cents to rands
+            if current_price:
+                current_price = current_price / 100
+        else:
+            currency = raw_currency
+        
+        # Get name
+        name = info.get('longName') or info.get('shortName') or symbol
+        
+        stock_info = StockInfo(
+            symbol=symbol,
+            name=name,
+            sector=info.get('sector'),
+            industry=info.get('industry'),
+            market=market,
+            currency=currency,
+            current_price=current_price,
+            market_cap=info.get('marketCap'),
+            volume=info.get('volume') or info.get('regularMarketVolume'),
+            pe_ratio=info.get('trailingPE') or info.get('forwardPE'),
+            dividend_yield=info.get('dividendYield')
+        )
+        
+        print(f"✓ {symbol}: {name}, {currency}, ${current_price}")
+        return stock_info
         
     except Exception as e:
-        logger.error(f"Failed to sync stocks to MongoDB: {e}")
-        raise HTTPException(status_code=500, detail=f"Sync failed: {str(e)}")
+        print(f"✗ Error fetching data for {symbol}: {str(e)}")
+        return None
 
-@router.get("/", response_model=StockSearchResponse)
-async def get_all_stocks(
-    page: int = Query(1, ge=1, description="Page number"),
-    per_page: int = Query(50, ge=1, le=500, description="Items per page"),
+@router.get("/", response_model=StockListResponse)
+async def get_stocks(
+    limit: int = Query(20, ge=1, le=100, description="Number of stocks to return"),
     search: Optional[str] = Query(None, description="Search stocks by symbol or name"),
-    category: str = Query("all", description="Category: all, equitiesexpanded, equities, etfs, bundles, crypto"),
     sector: Optional[str] = Query(None, description="Filter by sector"),
-    market: Optional[str] = Query(None, description="Filter by market (JSE, NYSE, NASDAQ, etc.)"),
+    market: Optional[str] = Query(None, description="Filter by market"),
     currency: Optional[str] = Query(None, description="Filter by currency"),
     min_price: Optional[float] = Query(None, ge=0, description="Minimum stock price"),
     max_price: Optional[float] = Query(None, ge=0, description="Maximum stock price"),
-    tradeable_only: bool = Query(True, description="Show only tradeable stocks"),
-    sort_by: str = Query("symbol", description="Sort by: symbol, name, price, market_cap, returns_1m"),
-    sort_order: str = Query("asc", description="Sort order: asc, desc"),
-    token: Optional[str] = Depends(get_bearer_token)
+    has_dividend: Optional[bool] = Query(None, description="Filter stocks that pay dividends"),
+    sort_by: str = Query("symbol", description="Sort by: symbol, name, price, market_cap"),
+    sort_order: str = Query("asc", description="Sort order: asc, desc")
 ):
-    """Get all available stocks from EasyEquities with filtering and pagination"""
-    
-    if not token:
-        raise HTTPException(status_code=401, detail="Authorization token required. Please include Bearer token in Authorization header")
-    
+    """Get stocks from yfinance with filtering and simple limit"""
     try:
-        # Set token in client
-        synatic_client.set_bearer_token(token)
+        print(f"Fetching stocks with filters: market={market}, currency={currency}, limit={limit}")
         
-        # Fetch instruments based on category
-        all_instruments = []
-        from_cache = False
+        # Get stock data
+        stocks_data = []
         
-        if category == "all":
-            # Fetch from multiple categories
-            sa_stocks = await synatic_client.get_all_sa_equities()
-            us_stocks = await synatic_client.get_all_us_equities()
-            etfs = await synatic_client.get_all_etfs()
+        # Determine which stocks to fetch based on filters
+        symbols_to_fetch = POPULAR_STOCKS
+        
+        # If filtering by market or currency, pre-filter symbols
+        if market:
+            if market.upper() == "JSE":
+                symbols_to_fetch = JSE_STOCKS
+            elif market.upper() in ["NASDAQ", "NYSE"]:
+                symbols_to_fetch = US_STOCKS
+        
+        print(f"Fetching {len(symbols_to_fetch)} symbols...")
+        
+        # Fetch data for selected symbols
+        for i, symbol in enumerate(symbols_to_fetch):
+            print(f"Progress: {i+1}/{len(symbols_to_fetch)} - {symbol}")
+            stock_info = get_stock_info(symbol)
+            if stock_info:
+                stocks_data.append(stock_info)
             
-            all_instruments.extend(sa_stocks)
-            all_instruments.extend(us_stocks)
-            all_instruments.extend(etfs)
-        elif category == "equitiesexpanded":
-            all_instruments = await synatic_client.get_all_sa_equities()
-        elif category == "equities":
-            all_instruments = await synatic_client.get_all_us_equities()
-        elif category == "etfs":
-            all_instruments = await synatic_client.get_all_etfs()
-        elif category == "bundles":
-            all_instruments = await synatic_client.get_all_bundles()
-        elif category == "crypto":
-            all_instruments = await synatic_client.get_all_crypto()
-        else:
-            all_instruments = await synatic_client.search_instruments(category=category)
+            # Limit fetching for performance (remove this in production)
+            if len(stocks_data) >= 50:  # Fetch more stocks to allow better filtering
+                break
         
-        # Transform to StockInfo objects
-        stocks = [transform_to_stock_info(inst) for inst in all_instruments]
+        print(f"Successfully fetched {len(stocks_data)} stocks")
         
-        # Apply search filter
+        # Apply filters
+        filtered_stocks = stocks_data.copy()
+        
         if search:
             search_lower = search.lower()
-            stocks = [
-                stock for stock in stocks
-                if search_lower in stock.symbol.lower() or 
-                   search_lower in stock.name.lower() or
-                   search_lower in stock.contract_code.lower()
+            filtered_stocks = [
+                stock for stock in filtered_stocks
+                if (search_lower in stock.symbol.lower() or 
+                    (stock.name and search_lower in stock.name.lower()))
             ]
         
-        # Apply other filters
         if sector:
-            stocks = [stock for stock in stocks if stock.sector.lower() == sector.lower()]
+            filtered_stocks = [
+                stock for stock in filtered_stocks 
+                if stock.sector and sector.lower() in stock.sector.lower()
+            ]
         
         if market:
-            stocks = [stock for stock in stocks if stock.market.upper() == market.upper()]
+            filtered_stocks = [
+                stock for stock in filtered_stocks 
+                if stock.market and stock.market.upper() == market.upper()
+            ]
         
         if currency:
-            stocks = [stock for stock in stocks if stock.currency.upper() == currency.upper()]
+            print(f"Filtering by currency: {currency}")
+            before_count = len(filtered_stocks)
+            
+            # Handle both ZAR and ZAc (South African cents)
+            if currency.upper() == "ZAR":
+                filtered_stocks = [
+                    stock for stock in filtered_stocks 
+                    if stock.currency and stock.currency.upper() in ["ZAR", "ZAC"]
+                ]
+            else:
+                filtered_stocks = [
+                    stock for stock in filtered_stocks 
+                    if stock.currency and stock.currency.upper() == currency.upper()
+                ]
+            print(f"Currency filter: {before_count} -> {len(filtered_stocks)} stocks")
         
         if min_price is not None:
-            stocks = [stock for stock in stocks if stock.last_price and stock.last_price >= min_price]
+            filtered_stocks = [
+                stock for stock in filtered_stocks 
+                if stock.current_price and stock.current_price >= min_price
+            ]
         
         if max_price is not None:
-            stocks = [stock for stock in stocks if stock.last_price and stock.last_price <= max_price]
+            filtered_stocks = [
+                stock for stock in filtered_stocks 
+                if stock.current_price and stock.current_price <= max_price
+            ]
         
-        if tradeable_only:
-            stocks = [stock for stock in stocks if stock.is_tradeable]
+        if has_dividend is not None:
+            if has_dividend:
+                filtered_stocks = [
+                    stock for stock in filtered_stocks 
+                    if stock.dividend_yield and stock.dividend_yield > 0
+                ]
+            else:
+                filtered_stocks = [
+                    stock for stock in filtered_stocks 
+                    if not stock.dividend_yield or stock.dividend_yield == 0
+                ]
         
         # Sort stocks
-        reverse = sort_order == "desc"
+        reverse = sort_order.lower() == "desc"
+        
         if sort_by == "symbol":
-            stocks.sort(key=lambda x: x.symbol, reverse=reverse)
+            filtered_stocks.sort(key=lambda x: x.symbol, reverse=reverse)
         elif sort_by == "name":
-            stocks.sort(key=lambda x: x.name, reverse=reverse)
+            filtered_stocks.sort(key=lambda x: x.name or "", reverse=reverse)
         elif sort_by == "price":
-            stocks.sort(key=lambda x: x.last_price or 0, reverse=reverse)
+            filtered_stocks.sort(key=lambda x: x.current_price or 0, reverse=reverse)
         elif sort_by == "market_cap":
-            stocks.sort(key=lambda x: x.market_cap or 0, reverse=reverse)
-        elif sort_by == "returns_1m":
-            stocks.sort(key=lambda x: x.returns_1m or -999, reverse=reverse)
+            filtered_stocks.sort(key=lambda x: x.market_cap or 0, reverse=reverse)
         
-        # Apply pagination
-        total_count = len(stocks)
-        start_idx = (page - 1) * per_page
-        end_idx = start_idx + per_page
-        paginated_stocks = stocks[start_idx:end_idx]
+        # Apply limit
+        total_count = len(filtered_stocks)
+        limited_stocks = filtered_stocks[:limit]
         
-        # Check if data came from cache
-        cache_key = f"{category}__ALL_1"
-        if cache_key in synatic_client._instruments_cache:
-            from_cache = True
+        print(f"Final result: {len(limited_stocks)} stocks returned (total available: {total_count})")
         
-        return StockSearchResponse(
-            stocks=paginated_stocks,
+        return StockListResponse(
+            stocks=limited_stocks,
             total_count=total_count,
-            page=page,
-            per_page=per_page,
-            from_cache=from_cache
+            returned_count=len(limited_stocks)
         )
         
     except Exception as e:
-        print(f"Error in get_all_stocks: {str(e)}")
+        print(f"Error in get_stocks: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error fetching stocks: {str(e)}")
 
-@router.get("/markets", response_model=List[MarketSummary])
-async def get_markets_summary(
-    token: Optional[str] = Depends(get_bearer_token)
-):
-    """Get summary of all available markets"""
-    
-    if not token:
-        raise HTTPException(status_code=401, detail="Authorization token required")
-    
-    try:
-        synatic_client.set_bearer_token(token)
-        
-        # Fetch all categories
-        all_data = await synatic_client.get_all_instruments()
-        
-        # Group by market
-        markets_dict = {}
-        for category, instruments in all_data.items():
-            for inst in instruments:
-                general = inst.get("General", {})
-                exchange = inst.get("Exchange", "")
-                flag_code = inst.get("flagCode", "")
-                
-                # Determine market
-                if flag_code == "ZA" or exchange == "JSE":
-                    market = "JSE"
-                elif exchange in ["USA", "NYSE", "NASDAQ"]:
-                    market = exchange if exchange != "USA" else "NYSE"
-                else:
-                    market = exchange or "Unknown"
-                
-                sector = general.get("sector", inst.get("category", "Unknown"))
-                
-                if market not in markets_dict:
-                    markets_dict[market] = {
-                        "count": 0,
-                        "sectors": set()
-                    }
-                
-                markets_dict[market]["count"] += 1
-                markets_dict[market]["sectors"].add(sector)
-        
-        # Create summaries
-        market_summaries = []
-        for market_name, info in markets_dict.items():
-            market_summaries.append(
-                MarketSummary(
-                    market=market_name,
-                    total_stocks=info["count"],
-                    sectors=sorted(list(info["sectors"]))
-                )
-            )
-        
-        return market_summaries
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching markets: {str(e)}")
-
 @router.get("/sectors")
-async def get_sectors(
-    market: Optional[str] = Query(None, description="Filter sectors by market"),
-    category: str = Query("all", description="Category to fetch sectors from"),
-    token: Optional[str] = Depends(get_bearer_token)
-):
-    """Get all available sectors"""
-    
-    if not token:
-        raise HTTPException(status_code=401, detail="Authorization token required")
-    
+async def get_available_sectors():
+    """Get all available sectors from the current stock list"""
     try:
-        synatic_client.set_bearer_token(token)
-        
-        # Fetch instruments
-        if category == "all":
-            all_data = await synatic_client.get_all_instruments()
-            all_instruments = []
-            for instruments in all_data.values():
-                all_instruments.extend(instruments)
-        else:
-            all_instruments = await synatic_client.search_instruments(category=category)
-        
-        # Extract unique sectors
+        print("Fetching sectors from yfinance...")
         sectors = set()
-        for inst in all_instruments:
-            if market:
-                inst_market = inst.get("Exchange", "")
-                flag_code = inst.get("flagCode", "")
-                if flag_code == "ZA":
-                    inst_market = "JSE"
-                if inst_market.upper() != market.upper():
-                    continue
-            
-            general = inst.get("General", {})
-            sector = general.get("sector", inst.get("category", "Unknown"))
-            sectors.add(sector)
+        
+        # Get unique sectors from a sample of stocks
+        sample_stocks = POPULAR_STOCKS[:20]  # Just check first 20 for performance
+        for symbol in sample_stocks:
+            try:
+                ticker = yf.Ticker(symbol)
+                info = ticker.info
+                sector = info.get('sector')
+                if sector:
+                    sectors.add(sector)
+            except:
+                continue
         
         return {"sectors": sorted(list(sectors))}
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching sectors: {str(e)}")
 
-@router.get("/search")
-async def search_stocks(
-    q: str = Query(..., min_length=1, description="Search query"),
-    limit: int = Query(10, ge=1, le=50, description="Maximum number of results"),
-    category: str = Query("all", description="Category to search in"),
-    token: Optional[str] = Depends(get_bearer_token)
-):
-    """Search stocks by symbol or name"""
-    
-    if not token:
-        raise HTTPException(status_code=401, detail="Authorization token required")
-    
-    try:
-        synatic_client.set_bearer_token(token)
-        
-        # Search in specified category
-        if category == "all":
-            # Search in multiple categories
-            sa_results = await synatic_client.search_instruments("equitiesexpanded", search_value=q)
-            us_results = await synatic_client.search_instruments("equities", search_value=q)
-            etf_results = await synatic_client.search_instruments("etfs", search_value=q)
-            
-            all_results = sa_results + us_results + etf_results
-        else:
-            all_results = await synatic_client.search_instruments(category, search_value=q)
-        
-        # Transform and limit results
-        results = []
-        for inst in all_results[:limit]:
-            stock_info = transform_to_stock_info(inst)
-            results.append({
-                "symbol": stock_info.symbol,
-                "name": stock_info.name,
-                "contract_code": stock_info.contract_code,
-                "market": stock_info.market,
-                "last_price": stock_info.last_price,
-                "currency": stock_info.currency,
-                "logo_url": stock_info.logo_url
-            })
-        
-        return {"results": results, "count": len(results)}
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error searching stocks: {str(e)}")
-
-@router.get("/{symbol}", response_model=StockDetail)
-async def get_stock_detail(
-    symbol: str,
-    token: Optional[str] = Depends(get_bearer_token)
-):
-    """Get detailed information for a specific stock"""
-    
-    if not token:
-        raise HTTPException(status_code=401, detail="Authorization token required")
-    
-    try:
-        synatic_client.set_bearer_token(token)
-        
-        # Search for the stock across categories
-        found_instrument = None
-        
-        # Try searching by symbol
-        for category in ["equitiesexpanded", "equities", "etfs"]:
-            results = await synatic_client.search_instruments(category, search_value=symbol)
-            for inst in results:
-                if inst.get("ticker", "").upper() == symbol.upper() or \
-                   inst.get("contractCode", "").upper() == symbol.upper():
-                    found_instrument = inst
-                    break
-            if found_instrument:
-                break
-        
-        if not found_instrument:
-            raise HTTPException(status_code=404, detail=f"Stock {symbol} not found")
-        
-        # Extract detailed information
-        general = found_instrument.get("General", {})
-        fundamental = found_instrument.get("Fundamental", {})
-        price_data = found_instrument.get("Price", {})
-        dividends = found_instrument.get("Dividends", {})
-        returns = found_instrument.get("returns", {})
-        
-        # Determine market
-        exchange = found_instrument.get("Exchange", "")
-        flag_code = found_instrument.get("flagCode", "")
-        if flag_code == "ZA" or exchange == "JSE":
-            market = "JSE"
-        elif exchange in ["USA", "NYSE", "NASDAQ"]:
-            market = exchange if exchange != "USA" else "NYSE"
-        else:
-            market = exchange or "Unknown"
-        
-        return StockDetail(
-            symbol=found_instrument.get("ticker", symbol),
-            name=found_instrument.get("name", ""),
-            contract_code=found_instrument.get("contractCode", ""),
-            sector=general.get("sector", "Unknown"),
-            industry=general.get("industry", "Unknown"),
-            market=market,
-            currency=general.get("currency", "ZAR" if flag_code == "ZA" else "USD"),
-            description=found_instrument.get("description") or general.get("business_description"),
-            last_price=float(found_instrument.get("lastPrice", 0) or 0) if found_instrument.get("lastPrice") else None,
-            previous_close=None,  # Not provided by Synatic
-            change=None,  # Would need to calculate
-            change_percent=None,  # Would need to calculate
-            volume=price_data.get("volume"),
-            market_cap=fundamental.get("mktcap"),
-            pe_ratio=fundamental.get("pe"),
-            eps=fundamental.get("eps"),
-            dividend_yield=dividends.get("yield"),
-            price_52w_high=price_data.get("price52whigh"),
-            price_52w_low=price_data.get("price52wlow"),
-            returns_1m=returns.get("1mo", {}).get("percentage"),
-            returns_3m=returns.get("3mo", {}).get("percentage"),
-            returns_6m=returns.get("6mo", {}).get("percentage"),
-            logo_url=found_instrument.get("logoUrl"),
-            company_website=general.get("company_website"),
-            is_tradeable=True,
-            updated_at=datetime.now()
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching stock details: {str(e)}")
-
-@router.get("/{symbol}/similar")
-async def get_similar_stocks(
-    symbol: str,
-    limit: int = Query(5, ge=1, le=20, description="Maximum number of similar stocks"),
-    token: Optional[str] = Depends(get_bearer_token)
-):
-    """Get stocks similar to the specified stock (same sector/industry)"""
-    
-    if not token:
-        raise HTTPException(status_code=401, detail="Authorization token required")
-    
-    try:
-        synatic_client.set_bearer_token(token)
-        
-        # Find the target stock
-        target_stock = None
-        for category in ["equitiesexpanded", "equities", "etfs"]:
-            results = await synatic_client.search_instruments(category, search_value=symbol)
-            for inst in results:
-                if inst.get("ticker", "").upper() == symbol.upper():
-                    target_stock = inst
-                    break
-            if target_stock:
-                break
-        
-        if not target_stock:
-            raise HTTPException(status_code=404, detail=f"Stock {symbol} not found")
-        
-        target_general = target_stock.get("General", {})
-        target_sector = target_general.get("sector", "")
-        target_industry = target_general.get("industry", "")
-        target_market = target_stock.get("Exchange", "")
-        
-        # Get all stocks in the same category
-        category = target_stock.get("category", "equities")
-        all_stocks = await synatic_client.search_instruments(category)
-        
-        # Find similar stocks
-        similar_stocks = []
-        for stock in all_stocks:
-            if stock.get("ticker") == target_stock.get("ticker"):
-                continue
-            
-            stock_general = stock.get("General", {})
-            similarity_score = 0
-            
-            # Calculate similarity
-            if stock_general.get("sector") == target_sector:
-                similarity_score += 0.5
-            if stock_general.get("industry") == target_industry:
-                similarity_score += 0.3
-            if stock.get("Exchange") == target_market:
-                similarity_score += 0.2
-            
-            if similarity_score > 0:
-                similar_stocks.append({
-                    "symbol": stock.get("ticker", ""),
-                    "name": stock.get("name", ""),
-                    "sector": stock_general.get("sector", ""),
-                    "last_price": float(stock.get("lastPrice", 0) or 0),
-                    "similarity_score": similarity_score
-                })
-        
-        # Sort by similarity and limit
-        similar_stocks.sort(key=lambda x: x["similarity_score"], reverse=True)
-        
-        return {
-            "symbol": symbol.upper(),
-            "similar_stocks": similar_stocks[:limit]
+@router.get("/markets")
+async def get_available_markets():
+    """Get all available markets"""
+    return {
+        "markets": ["JSE", "NASDAQ", "NYSE", "Other"],
+        "description": {
+            "JSE": "Johannesburg Stock Exchange (South African stocks ending in .JO)",
+            "NASDAQ": "NASDAQ Global Select Market",
+            "NYSE": "New York Stock Exchange", 
+            "Other": "Other international exchanges"
         }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching similar stocks: {str(e)}")
+    }
 
-@router.post("/sync-all")
-async def sync_all_instruments(
-    token: Optional[str] = Depends(get_bearer_token)
-):
-    """Sync all instruments from EasyEquities (admin endpoint)"""
-    
-    if not token:
-        raise HTTPException(status_code=401, detail="Authorization token required")
-    
+@router.get("/test/{symbol}")
+async def test_stock(symbol: str):
+    """Test endpoint to debug a single stock"""
     try:
-        synatic_client.set_bearer_token(token)
+        print(f"Testing stock: {symbol}")
+        ticker = yf.Ticker(symbol)
+        info = ticker.info
         
-        # Fetch all categories
-        all_data = await synatic_client.get_all_instruments()
-        
-        summary = {}
-        total_instruments = 0
-        
-        for category, instruments in all_data.items():
-            count = len(instruments)
-            summary[category] = count
-            total_instruments += count
-        
+        # Return raw info for debugging
         return {
-            "status": "success",
-            "total_instruments": total_instruments,
-            "breakdown": summary,
-            "cached": True,
-            "cache_ttl_seconds": synatic_client._cache_ttl
+            "symbol": symbol,
+            "raw_info": {
+                "longName": info.get('longName'),
+                "shortName": info.get('shortName'),
+                "currency": info.get('currency'),
+                "currentPrice": info.get('currentPrice'),
+                "regularMarketPrice": info.get('regularMarketPrice'),
+                "sector": info.get('sector'),
+                "industry": info.get('industry'),
+                "marketCap": info.get('marketCap'),
+                "volume": info.get('volume')
+            },
+            "processed": get_stock_info(symbol)
         }
-        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error syncing instruments: {str(e)}")
+        return {"error": str(e), "symbol": symbol}
+
+@router.get("/currencies")
+async def get_available_currencies():
+    """Get all available currencies"""
+    return {
+        "currencies": ["USD", "ZAR", "EUR", "GBP", "JPY"],
+        "description": {
+            "USD": "US Dollar",
+            "ZAR": "South African Rand",
+            "EUR": "Euro",
+            "GBP": "British Pound",
+            "JPY": "Japanese Yen"
+        }
+    }
