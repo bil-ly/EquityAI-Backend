@@ -8,10 +8,11 @@ if [ -z "$TOKEN" ]; then
     exit 1
 fi
 
-CATEGORIES=("equitiesexpanded" "commoditiesexpanded" "bondsexpanded" "cryptoexpanded" "etfsexpanded")
+CATEGORIES=("equitiesexpanded" "commoditiesexpanded" "cryptoexpanded")
 
 for category in "${CATEGORIES[@]}"
 do
     echo "Fetching $category..."
     python3 scripts/fetch_category.py "$TOKEN" "$category"
+    sleep 4  # polite delay between categories
 done

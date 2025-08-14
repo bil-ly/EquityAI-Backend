@@ -2,11 +2,15 @@ import os
 from motor.motor_asyncio import AsyncIOMotorClient
 from beanie import init_beanie
 import logging
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from app.models.database import User, Stock, Portfolio, Transaction, Dividend, Analysis
 
 logger = logging.getLogger(__name__)
-
+MONGODB_URL = os.getenv("MONGODB_URL")
+MONGODB_DB = os.getenv("MONGODB_DB")
 class Database:
     client: AsyncIOMotorClient = None
     database = None
@@ -16,13 +20,13 @@ db = Database()
 async def connect_to_mongo():
     """Create database connection"""
     try:
-        mongodb_url = os.getenv("MONGODB_URL", "mongodb://equityai_admin:bllly99@localhost:27017/equityai?authSource=admin")
+        mongodb_url = MONGODB_URL 
         
         logger.info(f"Connecting to MongoDB...")
         
         db.client = AsyncIOMotorClient(mongodb_url)
         
-        database_name = os.getenv("MONGODB_DATABASE", "equityai")
+        database_name = MONGODB_DB
         db.database = db.client[database_name]
         
         await db.client.admin.command('ping')

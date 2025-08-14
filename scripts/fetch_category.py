@@ -1,76 +1,54 @@
 import sys
-import os
+import time
 import json
-import asyncio
+import requests
 import logging
-import httpx
+import os
 
-from app.database import connect_to_mongo, close_mongo_connection
-from app.models.database import Stock
-
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
-API_URL = "https://rest.synatic.openeasy.io/easyequities/investnow/search"
+TOKEN = sys.argv[1]
+CATEGORY = sys.argv[2]
 
-async def fetch_category(token: str, category: str, page: int = 1):
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        "Accept": "application/json"
-    }
+URL = "https://rest.synatic.openeasy.io/easyequities/investnow/search"
+HEADERS = {
+    "Authorization": f"Bearer {TOKEN}",
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"
+}
+
+def fetch_category_page(page: int):
     payload = {
         "searchValue": "",
         "account_filter": "ALL",
-        "category": category,
+        "category": CATEGORY,
         "page": page
     }
-    
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(API_URL, headers=headers, json=payload)
-        if resp.status_code == 200:
-            return resp.json()
-        elif resp.status_code == 204:
-            logger.warning(f"No data for {category}, page {page}")
-            return None
-        else:
-            logger.error(f"Request failed: {resp.status_code} {resp.text}")
-            return None
+    response = requests.post(URL, headers=HEADERS, json=payload)
+    if response.status_code == 200:
+        return response.json().get("instruments", [])
+    else:
+        logger.warning(f"Page {page} failed with status {response.status_code}")
+        return []
 
-async def save_and_db(token: str, category: str):
-    await connect_to_mongo()
-    
-    all_items = []
+def fetch_all_pages():
     page = 1
-    
+    all_items = []
     while True:
-        logger.info(f"Fetching {category}, page {page}...")
-        data = await fetch_category(token, category, page)
-        if not data or "instruments" not in data or len(data["instruments"]) == 0:
+        logger.info(f"Fetching page {page} for {CATEGORY}...")
+        items = fetch_category_page(page)
+        if not items:
             break
-        all_items.extend(data["instruments"])
+        all_items.extend(items)
         page += 1
-
-    file_name = f"{category}.json"
-    with open(file_name, "w") as f:
-        json.dump(all_items, f, indent=4)
-    logger.info(f"Saved {len(all_items)} items to {file_name}")
-    
-    #TODO: Will update it , i might have to convert it into an array first so that i can see it as a Document , will also need to create the collection too for the categories
-    for item in all_items:
-        await Stock.find_one(Stock.id == item["id"]).upsert(
-            dict(item)
-        )
-    logger.info(f"Saved {len(all_items)} items to MongoDB")
-    
-    await close_mongo_connection()
+        time.sleep(1)  # polite delay between pages
+    return all_items
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print("Usage: python fetch_category.py <TOKEN> <CATEGORY>")
-        sys.exit(1)
-
-    token = sys.argv[1]
-    category = sys.argv[2]
-
-    asyncio.run(save_and_db(token, category))
+    data = fetch_all_pages()
+    filename = f"{CATEGORY}.json"
+    with open(filename, "w") as f:
+        json.dump(data, f, indent=2)
+    logger.info(f"Saved {len(data)} items to {filename}")
