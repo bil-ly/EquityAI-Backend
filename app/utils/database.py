@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 from motor.motor_asyncio import AsyncIOMotorClient
 from beanie import init_beanie
 import logging
@@ -12,7 +13,7 @@ logger = logging.getLogger(__name__)
 MONGODB_URL = os.getenv("MONGODB_URL")
 MONGODB_DB = os.getenv("MONGODB_DB")
 class Database:
-    client: AsyncIOMotorClient = None
+    client: Optional[AsyncIOMotorClient] = None
     database = None
 
 db = Database()

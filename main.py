@@ -1,6 +1,16 @@
+from dotenv import load_dotenv
+
+# Load environment variables from .env file FIRST
+load_dotenv()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api import auth, portfolio, analysis, dividends, stocks
+
+import os
+print("🔍 DEBUG - Environment loading check:")
+print(f"   MONGODB_URL from env: {os.getenv('MONGODB_URL')}")
+print(f"   MONGODB_DATABASE from env: {os.getenv('MONGODB_DATABASE')}")
 
 app = FastAPI(
     title="EquityAI Backend",
