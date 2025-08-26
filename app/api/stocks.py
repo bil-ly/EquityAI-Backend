@@ -9,7 +9,7 @@ router = APIRouter(tags=["stocks"])
 
 # Database configuration
 MONGODB_URL = os.getenv("MONGODB_URL")
-DATABASE_NAME = os.getenv("MONGODB_DATABASE") or os.getenv("MONGODB_DB")  # Support both variable names
+DATABASE_NAME = os.getenv("MONGODB_DATABASE") or os.getenv("MONGODB_DB")
 MONGODB_USERNAME = os.getenv("MONGODB_USERNAME")
 MONGODB_PASSWORD = os.getenv("MONGODB_PASSWORD")
 
@@ -22,14 +22,10 @@ def build_mongodb_url() -> str:
     if not MONGODB_URL:
         raise ValueError("MONGODB_URL environment variable is not set")
     
-    # If username and password are provided, inject them into the URL
     if MONGODB_USERNAME and MONGODB_PASSWORD:
-        # Parse the existing URL to inject credentials
         if "://" in MONGODB_URL:
             protocol, rest = MONGODB_URL.split("://", 1)
-            # Check if credentials are already in the URL
             if "@" not in rest:
-                # Insert credentials
                 return f"{protocol}://{MONGODB_USERNAME}:{MONGODB_PASSWORD}@{rest}"
         return MONGODB_URL
     
@@ -49,17 +45,15 @@ async def get_database() -> AsyncIOMotorDatabase:
         connection_url = build_mongodb_url()
         
         try:
-            # Create client with connection options
             db_client = AsyncIOMotorClient(
                 connection_url,
-                serverSelectionTimeoutMS=5000,  # 5 second timeout
-                connectTimeoutMS=10000,         # 10 second connection timeout
-                socketTimeoutMS=0,              # No socket timeout
-                maxPoolSize=10,                 # Maximum number of connections
-                retryWrites=True               # Enable retryable writes
+                serverSelectionTimeoutMS=5000,  
+                connectTimeoutMS=10000,         
+                socketTimeoutMS=0,             
+                maxPoolSize=10,                 
+                retryWrites=True               
             )
             
-            # Test the connection
             await db_client.admin.command('ping')
             print(f"Successfully connected to MongoDB")
             
