@@ -14,9 +14,20 @@ dependencies = [
     "numpy>=2.3.2",
     "pandas>=2.3.1",
     "pyjwt==2.8.0",
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.1.0",
     "python-dotenv>=1.1.1",
     "requests>=2.32.4",
     "uvicorn>=0.35.0",
     "yfinance>=0.2.65",
 ]
 
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore::RuntimeWarning",
+    "ignore:coroutine.*was never awaited:RuntimeWarning",
+]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+addopts = "-v --tb=short"
